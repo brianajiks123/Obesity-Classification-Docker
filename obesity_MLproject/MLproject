@@ -1,0 +1,15 @@
+name: obesity-classification-mlflow-with-tuning
+
+conda_env: conda.yaml
+
+entry_points:
+  main:
+    parameters:
+      input: {type: str}
+      mode: {type: str, default: "local"}
+      local_uri: {type: str, default: "file:mlruns"}
+    command: >
+      python modelling_tuning.py
+      --input {input}
+      --mode {mode}
+      --local_uri {local_uri}
