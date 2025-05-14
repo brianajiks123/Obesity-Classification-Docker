@@ -1,0 +1,90 @@
+name: CI/CD MLflow
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  CSV_URL: "${{ github.workspace }}/obesity_MLproject/Obesity_preprocessing.csv"
+  TARGET_VAR: "Obesity"
+  MLFLOW_TRACKING_URI: "file:${{ github.workspace }}/mlruns"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout repository
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    # Setup Python
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12.7"
+
+    # Display environment variables
+    - name: Show env vars
+      run: |
+        echo "CSV_URL=$CSV_URL"
+        echo "TARGET_VAR=$TARGET_VAR"
+        echo "MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI"
+    
+    # Debug workspace contents
+    - name: List workspace files
+      run: |
+        ls -R ${{ github.workspace }}
+
+    # Build XGBoost from source
+    - name: Build XGBoost
+      run: |
+        git clone --recursive https://github.com/dmlc/xgboost.git
+        cd xgboost && mkdir build && cd build
+        cmake .. -DUSE_CUDA=OFF && make -j$(nproc)
+        cd ../python-package && python -m pip install .
+
+    # Install dependencies
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install dagshub mlflow imbalanced-learn
+
+    # Execute modelling script
+    - name: Run modelling_tuning.py
+      run: |
+        python ./obesity_MLproject/modelling_tuning.py \
+          --input $CSV_URL \
+          --mode local \
+          --local_uri $MLFLOW_TRACKING_URI
+
+    # Get latest MLflow run_id
+    - name: Get latest MLflow run_id
+      run: |
+        RUN_ID=$(ls -td ${{ github.workspace }}/mlruns/*/* | head -n1 | xargs basename)
+        echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+        echo "Latest run_id: $RUN_ID"
+
+    # Build Docker image
+    - name: Build Docker image
+      run: |
+        mlflow models build-docker \
+          --model-uri runs:/$RUN_ID/model \
+          --name obesity_classification \
+          --env-manager conda
+
+    # Push to Docker Hub
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+    - name: Tag and push image
+      run: |
+        docker tag obesity_classification ${{ secrets.DOCKER_HUB_USERNAME }}/obesity_classification:latest
+        docker push ${{ secrets.DOCKER_HUB_USERNAME }}/obesity_classification:latest
